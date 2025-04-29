@@ -1,25 +1,26 @@
 # /// script
 # requires-python = ">=3.12"
 # dependencies = [
+#     "crawl4ai",
 #     "instructor",
 #     "litellm",
-#     "markdownify",
 #     "openai",
 #     "pydantic>=2.1.0",
 #     "python-dotenv",
 #     "rich",
-#     "stealth-requests",
 # ]
 # [tool.uv]
 # exclude-newer = "2025-04-26T00:00:00Z"
 # ///
 
+import asyncio
 import argparse
 import os
+import sys
+import subprocess
 from dotenv import load_dotenv
 from rich.console import Console
-from stealth_requests import StealthSession
-from markdownify import markdownify as md
+from crawl4ai import AsyncWebCrawler, BrowserConfig, CrawlerRunConfig, CacheMode, LXMLWebScrapingStrategy
 import instructor
 from pydantic import BaseModel
 from openai import OpenAI
@@ -42,8 +43,15 @@ def load_schema_class(schema_name: str) -> type[BaseModel]:
     
     return getattr(schema_module, schema_name)
 
-def main() -> None:
+async def main() -> None:
     load_dotenv()
+    
+    # Install Playwright
+    try:
+        subprocess.run(["playwright", "install"], check=True)
+    except subprocess.CalledProcessError as e:
+        console.print(f"[red]Error installing Playwright: {e}[/red]")
+        sys.exit(1)
     
     parser = argparse.ArgumentParser(description="Harvester CLI")
     parser.add_argument(
@@ -53,7 +61,7 @@ def main() -> None:
         "-s", "--schema", required=True, help="Class name of the schema class to use from schema.py" 
     )
     parser.add_argument(
-        "-o", "--output", help="Output file path to save results"
+        "-o", "--output", help="Output file path (supports .json or .csv)"
     )
     
     args = parser.parse_args()
@@ -68,19 +76,22 @@ def main() -> None:
                 f.write(result)
         return result
 
-    with StealthSession() as session:
-        try:
-            response = session.get(args.url)
-            response.raise_for_status()
-        except Exception as e:
-            result = json.dumps({"Success": False, "error": str(e)})
-            if args.output:
-                with open(args.output, 'w') as f:
-                    f.write(result)
-            return result
-        
-        markdown = md(response.text)
-        #console.print(markdown)
+    # Crawl4ai setup
+    browser_conf = BrowserConfig(headless=True)
+    crawler_conf = CrawlerRunConfig(only_text=True,
+                              cache_mode=CacheMode.BYPASS,
+                              exclude_external_images=True,
+                              excluded_tags=["header", "footer"],
+                              scraping_strategy=LXMLWebScrapingStrategy())
+
+    async with AsyncWebCrawler(config=browser_conf) as crawler:
+        result = await crawler.arun(url=args.url, config=crawler_conf)
+        #print(result.markdown)
+        if result.markdown is not None:
+            console.print(result.markdown)
+        else:
+            console.print("No markdown generated.")
+            sys.exit()
 
     client = instructor.from_openai(OpenAI())
     response = client.chat.completions.create(
@@ -93,18 +104,45 @@ def main() -> None:
             },
             {
                 "role": "user",
-                "content": f"{markdown}",
+                "content": f"{result.markdown}",
             }
         ]
     )
     
     result = json.dumps(response.model_dump())
+    
+    # Handle output based on file extension
     if args.output:
-        with open(args.output, 'w') as f:
-            f.write(result)
+        file_ext = os.path.splitext(args.output)[1].lower()
+        
+        if file_ext == '.csv':
+            import csv
+            from datetime import datetime
+            
+            # Convert the response to a dictionary
+            data_dict = response.model_dump()
+            
+            # Add timestamp to the data
+            data_dict['timestamp'] = datetime.now().isoformat()
+            
+            # Reorder fields to put timestamp first
+            fieldnames = ['timestamp'] + [f for f in data_dict.keys() if f != 'timestamp']
+            
+            # Check if file exists to determine if we need to write headers
+            file_exists = os.path.isfile(args.output)
+            
+            with open(args.output, 'a', newline='') as f:
+                writer = csv.DictWriter(f, fieldnames=fieldnames)
+                if not file_exists:
+                    writer.writeheader()
+                writer.writerow(data_dict)
+        else:
+            # Default to JSON output
+            with open(args.output, 'w') as f:
+                f.write(result)
     
     console.print(result)
     return result
 
 if __name__ == "__main__":
-    main()
+    asyncio.run(main())

@@ -1,8 +1,8 @@
-name: Scrape Website
+name: Scrape Drink Price
 
 on:
   schedule:
-    - cron: '0 */6 * * *'  # Run every 6 hours
+    - cron: '0 0 * * *'  # Run daily at midnight
   workflow_dispatch:  # Allow manual triggering
 
 jobs:
@@ -27,11 +27,11 @@ jobs:
         OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
         LLM_MODEL: ${{ secrets.LLM_MODEL }}
       run: |
-        uv run harvester.py -u "ycombinator.com" -s "Website" -o "output.json"
+        uv run harvester.py -u https://www.konzum.hr/web/products/cockta-original-1-5-l -s Product -o 'cockta-1.5L-price.csv'
     
     - name: Commit and push if changed
       run: |
         git config --local user.email "action@github.com"
         git config --local user.name "GitHub Action"
         git add output.json
-        git diff --quiet && git diff --staged --quiet || (git commit -m "Update scraped data" && git push)
+        git diff --quiet && git diff --staged --quiet || (git commit -m "Update scraped banana data" && git push)
