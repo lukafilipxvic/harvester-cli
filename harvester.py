@@ -137,9 +137,24 @@ async def main() -> None:
                     writer.writeheader()
                 writer.writerow(data_dict)
         else:
-            # Default to JSON output
+            # For JSON, read existing data if file exists
+            if os.path.isfile(args.output):
+                with open(args.output, 'r') as f:
+                    try:
+                        existing_data = json.load(f)
+                        if not isinstance(existing_data, list):
+                            existing_data = [existing_data]
+                    except json.JSONDecodeError:
+                        existing_data = []
+            else:
+                existing_data = []
+            
+            # Append new data
+            existing_data.append(response.model_dump())
+            
+            # Write back to file
             with open(args.output, 'w') as f:
-                f.write(result)
+                json.dump(existing_data, f, indent=2)
     
     console.print(result)
     return result
